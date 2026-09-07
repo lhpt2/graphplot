@@ -1,0 +1,13 @@
+[package]
+name = "graphplot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+rand = "0.8"
+rand_chacha = "0.3"
+
+[profile.release]
+opt-level = 2
