@@ -152,6 +152,9 @@ pub struct GraphPlotApp {
     expr_input: String,
     expr_result_directed: bool,
     expr_log: Vec<(bool, String)>,
+
+    mis_source: Option<u64>,
+    mis_name: String,
 }
 
 impl Default for GraphPlotApp {
@@ -174,6 +177,9 @@ impl Default for GraphPlotApp {
             ),
             expr_result_directed: false,
             expr_log: Vec::new(),
+
+            mis_source: Some(0),
+            mis_name: String::from("IS"),
         }
     }
 }
@@ -482,6 +488,41 @@ impl GraphPlotApp {
         }
     }
 
+    fn compute_greedy_independent_set(&mut self) {
+        let Some(id) = self.mis_source else {
+            self.push_log(false, "Bitte einen Graphen auswählen.".to_string());
+            return;
+        };
+        let Some(tab) = self.tab_by_id(id) else {
+            self.push_log(false, "Graph existiert nicht mehr.".to_string());
+            return;
+        };
+        let name = self.mis_name.trim().to_string();
+        if name.is_empty() {
+            self.push_log(
+                false,
+                "Bitte einen Namen für die Menge angeben.".to_string(),
+            );
+            return;
+        }
+        let set = tab.graph.greedy_independent_set();
+        let source_name = tab.name.clone();
+        let value = SetValue::Vertices(set);
+        let msg = format!(
+            "{name} = unabhängige Menge (Greedy) von \"{source_name}\": {} ({} Elemente): {}",
+            value.kind(),
+            value.len(),
+            truncate(&value.format(), 160)
+        );
+        let color = self
+            .named_sets
+            .get(&name)
+            .map(|e| e.color)
+            .unwrap_or_else(|| PALETTE[self.named_sets.len() % PALETTE.len()]);
+        self.named_sets.insert(name, NamedSetEntry { value, color });
+        self.push_log(true, msg);
+    }
+
     fn expr_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Mengenausdrücke (Text)");
         ui.label(
@@ -518,6 +559,34 @@ impl GraphPlotApp {
         if ui.button("Ausführen").clicked() {
             self.run_expr_program();
         }
+
+        ui.add_space(10.0);
+        egui::CollapsingHeader::new("Unabhängige Menge (Greedy)").show(ui, |ui| {
+            ui.label(
+                "Berechnet eine maximale unabhängige Menge (kein Knotenpaar darin ist durch \
+                 eine Kante verbunden) per Greedy-Heuristik. Das ist NP-schwer exakt zu lösen; \
+                 das Ergebnis ist maximal, aber nicht garantiert die größtmögliche Menge.",
+            );
+            egui::ComboBox::from_label("Graph")
+                .selected_text(
+                    self.mis_source
+                        .and_then(|id| self.tab_by_id(id))
+                        .map(|t| t.name.clone())
+                        .unwrap_or_else(|| "—".to_string()),
+                )
+                .show_ui(ui, |ui| {
+                    for tab in &self.tabs {
+                        ui.selectable_value(&mut self.mis_source, Some(tab.id), &tab.name);
+                    }
+                });
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                ui.text_edit_singleline(&mut self.mis_name);
+            });
+            if ui.button("Berechnen").clicked() {
+                self.compute_greedy_independent_set();
+            }
+        });
 
         if !self.named_sets.is_empty() {
             ui.add_space(6.0);

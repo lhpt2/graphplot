@@ -29,6 +29,20 @@ Kombinieren von Graphen.
   - Induzierter Teilgraph von `A` auf einer wählbaren Knotenteilmenge
   - Umwandlung von `A` zwischen gerichtet und ungerichtet
 
+## Unabhängige Menge (Independent Set)
+
+Eine unabhängige Menge (kein Knotenpaar darin durch eine Kante verbunden)
+ist *kein* per-Knoten-Filter, sondern eine Eigenschaft der gesamten
+gewählten Teilmenge – das lässt sich nicht als einfacher Mengenbildner
+ausdrücken (die *größte* unabhängige Menge exakt zu finden ist NP-schwer).
+Dafür gibt es im Bereich "Mengenausdrücke" einen eigenen Abschnitt
+**"Unabhängige Menge (Greedy)"**: Graph auswählen, Name vergeben,
+"Berechnen" klicken – erzeugt per Greedy-Heuristik (Knoten in aufsteigender
+Grad-Reihenfolge aufnehmen, sofern keine Kante zu einem schon gewählten
+Knoten besteht) eine *maximale* (nicht notwendig größtmögliche)
+unabhängige Menge als benannte Knotenmenge, direkt nutzbar für die
+Markierung im Graphen.
+
 ## Mengenausdrücke (Text)
 
 Neben dem einfachen Dropdown-Panel gibt es ein Textfeld für frei

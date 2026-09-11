@@ -223,6 +223,27 @@ impl Graph {
         Graph::from_sets(a.directed, a.vertices.clone(), edges)
     }
 
+    /// A maximal independent set (no two chosen vertices adjacent, and no
+    /// further vertex could be added without creating an edge) via a greedy
+    /// heuristic: process vertices in ascending-degree order, keeping each
+    /// one only if it has no edge to a vertex already kept. Finding a
+    /// *maximum* independent set is NP-hard in general, so this only
+    /// guarantees maximality, not the largest possible size.
+    pub fn greedy_independent_set(&self) -> BTreeSet<VertexId> {
+        let degree =
+            |v: &str| -> usize { self.edges.iter().filter(|(a, b)| a == v || b == v).count() };
+        let mut order: Vec<VertexId> = self.vertices.iter().cloned().collect();
+        order.sort_by_key(|v| degree(v));
+
+        let mut chosen: BTreeSet<VertexId> = BTreeSet::new();
+        for v in order {
+            if !chosen.iter().any(|c| self.has_edge(c, &v)) {
+                chosen.insert(v);
+            }
+        }
+        chosen
+    }
+
     /// Reinterprets this graph as directed/undirected, converting the edge
     /// set accordingly (collapsing or duplicating as needed).
     pub fn with_directed(a: &Graph, directed: bool) -> Graph {
@@ -375,5 +396,42 @@ mod tests {
         for (a, b) in &graph.edges {
             assert_ne!(a, b);
         }
+    }
+
+    #[test]
+    fn greedy_independent_set_has_no_internal_edges() {
+        // path a-b-c-d
+        let a = g(
+            false,
+            &["a", "b", "c", "d"],
+            &[("a", "b"), ("b", "c"), ("c", "d")],
+        );
+        let is = a.greedy_independent_set();
+        assert!(!is.is_empty());
+        for u in &is {
+            for v in &is {
+                if u != v {
+                    assert!(!a.has_edge(u, v));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn greedy_independent_set_is_maximal() {
+        // path a-b-c: every vertex left out must have a neighbor inside the set
+        let a = g(false, &["a", "b", "c"], &[("a", "b"), ("b", "c")]);
+        let is = a.greedy_independent_set();
+        for v in &a.vertices {
+            if !is.contains(v) {
+                assert!(is.iter().any(|c| a.has_edge(c, v)));
+            }
+        }
+    }
+
+    #[test]
+    fn greedy_independent_set_of_edgeless_graph_is_everything() {
+        let a = g(false, &["a", "b", "c"], &[]);
+        assert_eq!(a.greedy_independent_set(), a.vertices);
     }
 }
