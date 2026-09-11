@@ -155,6 +155,15 @@ pub struct GraphPlotApp {
 
     mis_source: Option<u64>,
     mis_name: String,
+
+    lua_library: String,
+    lua_filters: BTreeMap<String, String>,
+    lua_editor_name: String,
+    lua_editor_source: String,
+    lua_apply_source: Option<u64>,
+    lua_apply_filter: Option<String>,
+    lua_result_name: String,
+    lua_log: Vec<(bool, String)>,
 }
 
 impl Default for GraphPlotApp {
@@ -180,6 +189,35 @@ impl Default for GraphPlotApp {
 
             mis_source: Some(0),
             mis_name: String::from("IS"),
+
+            lua_library: String::from(
+                "-- Wiederverwendbare Hilfsfunktionen für alle Filter-Skripte.\n\
+                 function is_isolated(g, v)\n    \
+                     return g:degree(v) == 0\n\
+                 end",
+            ),
+            lua_filters: BTreeMap::new(),
+            lua_editor_name: String::from("MeinFilter"),
+            lua_editor_source: String::from(
+                "-- g:vertices()  g:edges() (Liste {von, bis})  g:has_edge(a,b)  g:degree(v)\n\
+                 -- g:neighbors(v)  g:directed()  g:add_vertex(v)  g:add_edge(a,b)\n\
+                 -- g:remove_vertex(v)  g:remove_edge(a,b)\n\
+                 -- new_graph(gerichtet)  complement(g)  induced_subgraph(g, {liste})\n\
+                 -- greedy_independent_set(g)\n\
+                 function filter(g)\n    \
+                     local out = new_graph(g:directed())\n    \
+                     for _, v in ipairs(g:vertices()) do\n        \
+                         if is_isolated(g, v) then\n            \
+                             out:add_vertex(v)\n        \
+                         end\n    \
+                     end\n    \
+                     return out\n\
+                 end",
+            ),
+            lua_apply_source: Some(0),
+            lua_apply_filter: None,
+            lua_result_name: String::new(),
+            lua_log: Vec::new(),
         }
     }
 }
@@ -523,6 +561,194 @@ impl GraphPlotApp {
         self.push_log(true, msg);
     }
 
+    fn push_lua_log(&mut self, ok: bool, msg: String) {
+        self.lua_log.push((ok, msg));
+        if self.lua_log.len() > 50 {
+            self.lua_log.remove(0);
+        }
+    }
+
+    fn save_lua_filter(&mut self) {
+        let name = self.lua_editor_name.trim().to_string();
+        if name.is_empty() {
+            self.push_lua_log(
+                false,
+                "Bitte einen Namen für den Filter angeben.".to_string(),
+            );
+            return;
+        }
+        self.lua_filters
+            .insert(name.clone(), self.lua_editor_source.clone());
+        self.lua_apply_filter = Some(name.clone());
+        self.push_lua_log(true, format!("Filter \"{name}\" gespeichert."));
+    }
+
+    fn apply_lua_filter(&mut self) {
+        let Some(tab_id) = self.lua_apply_source else {
+            self.push_lua_log(false, "Bitte einen Graphen auswählen.".to_string());
+            return;
+        };
+        let Some(filter_name) = self.lua_apply_filter.clone() else {
+            self.push_lua_log(false, "Bitte einen Filter auswählen.".to_string());
+            return;
+        };
+        let Some(source) = self.lua_filters.get(&filter_name).cloned() else {
+            self.push_lua_log(false, "Filter existiert nicht mehr.".to_string());
+            return;
+        };
+        let Some(tab) = self.tab_by_id(tab_id) else {
+            self.push_lua_log(false, "Graph existiert nicht mehr.".to_string());
+            return;
+        };
+        let input = tab.graph.clone();
+        let source_graph_name = tab.name.clone();
+
+        match crate::scripting::run_filter(&source, &self.lua_library, &input) {
+            Ok(g) => {
+                let msg = format!(
+                    "Filter \"{filter_name}\" auf \"{source_graph_name}\" angewendet: |V| = {}, |E| = {}",
+                    g.vertices.len(),
+                    g.edges.len()
+                );
+                let name = if self.lua_result_name.trim().is_empty() {
+                    format!("{filter_name}({source_graph_name})")
+                } else {
+                    self.lua_result_name.trim().to_string()
+                };
+                let id = self.next_id;
+                self.next_id += 1;
+                self.add_tab(GraphTab::from_graph(id, name, g));
+                self.push_lua_log(true, msg);
+            }
+            Err(err) => {
+                self.push_lua_log(false, format!("Filter \"{filter_name}\":\n  {err}"));
+            }
+        }
+    }
+
+    fn lua_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Lua-Filter");
+        ui.label(
+            "Schreibe Filter-Skripte in Lua, die aus einem Graphen einen neuen Graphen bauen. \
+             Eine gemeinsame Bibliothek mit eigenen Hilfsfunktionen steht allen Filtern zur \
+             Verfügung.",
+        );
+
+        egui::CollapsingHeader::new("API-Referenz").show(ui, |ui| {
+            ui.label(
+                "g:vertices()   g:edges()  (Liste aus {von, bis})\n\
+                 g:has_edge(a,b)   g:degree(v)   g:neighbors(v)   g:directed()\n\
+                 g:add_vertex(v)   g:add_edge(a,b)\n\
+                 g:remove_vertex(v)   g:remove_edge(a,b)\n\n\
+                 new_graph(gerichtet)                       leerer neuer Graph\n\
+                 complement(g)\n\
+                 induced_subgraph(g, {liste})\n\
+                 greedy_independent_set(g)                  liefert eine Liste von Knoten\n\n\
+                 Ein Skript muss eine Funktion definieren:\n\
+                 function filter(g) ... return g2 end\n\n\
+                 Lua läuft mit der abgesicherten Standardbibliothek (kein Datei-/OS-Zugriff).",
+            );
+        });
+
+        egui::CollapsingHeader::new("Bibliothek (eigene Hilfsfunktionen)").show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut self.lua_library)
+                    .desired_rows(4)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+
+        ui.label("Filter-Editor:");
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            ui.text_edit_singleline(&mut self.lua_editor_name);
+        });
+        ui.add(
+            egui::TextEdit::multiline(&mut self.lua_editor_source)
+                .desired_rows(10)
+                .font(egui::TextStyle::Monospace),
+        );
+        if ui.button("Als Filter speichern").clicked() {
+            self.save_lua_filter();
+        }
+
+        if !self.lua_filters.is_empty() {
+            ui.add_space(6.0);
+            ui.label("Gespeicherte Filter:");
+            let names: Vec<String> = self.lua_filters.keys().cloned().collect();
+            let mut to_remove: Option<String> = None;
+            for name in &names {
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    if ui.small_button("Bearbeiten").clicked() {
+                        self.lua_editor_name = name.clone();
+                        self.lua_editor_source = self.lua_filters[name].clone();
+                    }
+                    if ui.small_button("x").clicked() {
+                        to_remove = Some(name.clone());
+                    }
+                });
+            }
+            if let Some(name) = to_remove {
+                self.lua_filters.remove(&name);
+                if self.lua_apply_filter.as_deref() == Some(name.as_str()) {
+                    self.lua_apply_filter = None;
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.label("Filter anwenden:");
+            egui::ComboBox::from_label("Lua: Graph")
+                .selected_text(
+                    self.lua_apply_source
+                        .and_then(|id| self.tab_by_id(id))
+                        .map(|t| t.name.clone())
+                        .unwrap_or_else(|| "—".to_string()),
+                )
+                .show_ui(ui, |ui| {
+                    for tab in &self.tabs {
+                        ui.selectable_value(&mut self.lua_apply_source, Some(tab.id), &tab.name);
+                    }
+                });
+            egui::ComboBox::from_label("Lua: Filter")
+                .selected_text(
+                    self.lua_apply_filter
+                        .clone()
+                        .unwrap_or_else(|| "—".to_string()),
+                )
+                .show_ui(ui, |ui| {
+                    for name in &names {
+                        ui.selectable_value(&mut self.lua_apply_filter, Some(name.clone()), name);
+                    }
+                });
+            ui.horizontal(|ui| {
+                ui.label("Neuer Tab-Name:");
+                ui.text_edit_singleline(&mut self.lua_result_name);
+            });
+            if ui.button("Anwenden -> neuer Tab").clicked() {
+                self.apply_lua_filter();
+            }
+        }
+
+        if !self.lua_log.is_empty() {
+            ui.add_space(6.0);
+            ui.label("Verlauf:");
+            egui::ScrollArea::vertical()
+                .id_salt("lua_log_scroll")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for (ok, msg) in self.lua_log.iter().rev() {
+                        let color = if *ok {
+                            Color32::from_rgb(140, 190, 140)
+                        } else {
+                            Color32::from_rgb(220, 80, 80)
+                        };
+                        ui.colored_label(color, msg);
+                    }
+                });
+        }
+    }
+
     fn expr_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Mengenausdrücke (Text)");
         ui.label(
@@ -703,6 +929,8 @@ impl eframe::App for GraphPlotApp {
                     self.operations_panel(ui);
                     ui.separator();
                     self.expr_panel(ui);
+                    ui.separator();
+                    self.lua_panel(ui);
                 });
             });
 

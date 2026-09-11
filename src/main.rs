@@ -2,6 +2,7 @@ mod app;
 mod expr;
 mod graph;
 mod layout;
+mod scripting;
 
 use app::GraphPlotApp;
 

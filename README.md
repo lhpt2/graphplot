@@ -29,6 +29,59 @@ Kombinieren von Graphen.
   - Induzierter Teilgraph von `A` auf einer wählbaren Knotenteilmenge
   - Umwandlung von `A` zwischen gerichtet und ungerichtet
 
+## Lua-Filter
+
+Zusätzlich zur Mengen-Methode gibt es einen Bereich **"Lua-Filter"**, mit
+dem sich aus einem Graphen per Lua-Skript ein neuer Graph bauen lässt –
+für Transformationen, die sich nicht sinnvoll als Mengenausdruck
+formulieren lassen (z. B. iterative/algorithmische Logik). Läuft über
+[mlua](https://github.com/mlua-rs/mlua) mit gebündeltem Lua 5.4 (kein
+System-Lua nötig) und der abgesicherten Standardbibliothek (kein Datei-/
+Prozess-/OS-Zugriff aus den Skripten heraus).
+
+Ein Skript muss eine Funktion `filter(g)` definieren, die den
+Eingabegraphen erhält und einen (neuen oder veränderten) Graphen
+zurückgibt:
+
+```lua
+function filter(g)
+    local out = new_graph(g:directed())
+    for _, v in ipairs(g:vertices()) do
+        if g:degree(v) == 0 then
+            out:add_vertex(v)
+        end
+    end
+    return out
+end
+```
+
+API auf einem Graphen `g`:
+
+| Methode | Bedeutung |
+|---|---|
+| `g:vertices()` | Liste aller Knoten |
+| `g:edges()` | Liste von `{von, bis}`-Paaren |
+| `g:has_edge(a, b)` | Kante vorhanden? (bei ungerichteten Graphen symmetrisch) |
+| `g:degree(v)` | Anzahl anliegender Kanten |
+| `g:neighbors(v)` | Liste benachbarter Knoten |
+| `g:directed()` | gerichtet? |
+| `g:add_vertex(v)` / `g:add_edge(a, b)` | Knoten/Kante hinzufügen |
+| `g:remove_vertex(v)` / `g:remove_edge(a, b)` | Knoten/Kante entfernen |
+
+Globale Hilfsfunktionen: `new_graph(gerichtet)` (leerer neuer Graph),
+`complement(g)`, `induced_subgraph(g, {liste})`,
+`greedy_independent_set(g)` (liefert eine Knotenliste) – letztere drei
+rufen direkt die entsprechenden, bereits in Rust implementierten
+Graph-Operationen auf.
+
+Eine gemeinsame **Bibliothek** (eigener, persistenter Lua-Quelltext) wird
+vor jedem Filter-Skript geladen, sodass eigene Hilfsfunktionen
+(`function is_isolated(g, v) ... end`) über mehrere Filter hinweg
+wiederverwendet werden können. Fertige Filter lassen sich unter einem
+Namen speichern, bearbeiten, löschen und über eine Auswahl (Graph +
+Filter) auf einen bestehenden Graphen anwenden – das Ergebnis öffnet
+automatisch als neuer, geplotteter Tab.
+
 ## Unabhängige Menge (Independent Set)
 
 Eine unabhängige Menge (kein Knotenpaar darin durch eine Kante verbunden)
