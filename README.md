@@ -85,12 +85,16 @@ bzw. Kanten mit ihren Endpunkten).
 
 ### Mengen im vorhandenen Graphen einfärben
 
-Jeder Graph-Tab hat oben eine **"Markierung"**-Auswahl: Wählt man dort eine
-definierte Menge aus, werden ihre Knoten bzw. Kanten direkt im bestehenden
-Graphen gelb hervorgehoben, statt einen neuen Tab zu öffnen. Das
-funktioniert für jede beliebige Menge, unabhängig davon, aus welchem Graphen
-sie berechnet wurde – nur die tatsächlich im aktuellen Tab vorhandenen
-Knoten/Kanten der Menge werden markiert.
+Jede definierte Menge bekommt automatisch eine eigene Farbe aus einer
+Palette (in der Liste "Definierte Mengen" per Klick auf das Farbfeld
+jederzeit änderbar – ein normaler Farbwähler). Jeder Graph-Tab hat oben
+einen **"Markierungen"**-Bereich mit einer Checkbox pro definierter Menge:
+Aktivierte Mengen werden mit ihrer zugehörigen Farbe direkt im bestehenden
+Graphen hervorgehoben (Knoten oder Kanten, je nach Mengentyp) – auch mehrere
+gleichzeitig, jede in ihrer eigenen Farbe. Das funktioniert für jede
+beliebige Menge, unabhängig davon, aus welchem Graphen sie berechnet wurde;
+es werden nur die tatsächlich im aktuellen Tab vorhandenen Knoten/Kanten
+markiert.
 
 ## Knotenidentität bei Mengenoperationen
 

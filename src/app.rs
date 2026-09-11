@@ -8,7 +8,22 @@ use crate::expr::{self, EvalCtx, SetValue, StmtResult};
 use crate::graph::{Graph, VertexId};
 use crate::layout::Layout;
 
-const HIGHLIGHT_COLOR: Color32 = Color32::from_rgb(255, 196, 0);
+const PALETTE: [Color32; 8] = [
+    Color32::from_rgb(255, 196, 0),
+    Color32::from_rgb(255, 99, 132),
+    Color32::from_rgb(54, 162, 235),
+    Color32::from_rgb(75, 192, 192),
+    Color32::from_rgb(153, 102, 255),
+    Color32::from_rgb(255, 159, 64),
+    Color32::from_rgb(199, 199, 60),
+    Color32::from_rgb(120, 220, 120),
+];
+
+#[derive(Clone)]
+struct NamedSetEntry {
+    value: SetValue,
+    color: Color32,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditMode {
@@ -42,7 +57,7 @@ struct GraphTab {
     rename_target: Option<VertexId>,
     rename_buffer: String,
     status: Option<String>,
-    highlight_name: Option<String>,
+    highlighted: BTreeSet<String>,
 }
 
 impl GraphTab {
@@ -60,7 +75,7 @@ impl GraphTab {
             rename_target: None,
             rename_buffer: String::new(),
             status: None,
-            highlight_name: None,
+            highlighted: BTreeSet::new(),
         }
     }
 
@@ -133,7 +148,7 @@ pub struct GraphPlotApp {
     op_induced_selection: BTreeSet<VertexId>,
     op_error: Option<String>,
 
-    named_sets: BTreeMap<String, SetValue>,
+    named_sets: BTreeMap<String, NamedSetEntry>,
     expr_input: String,
     expr_result_directed: bool,
     expr_log: Vec<(bool, String)>,
@@ -367,6 +382,11 @@ impl GraphPlotApp {
 
     fn run_expr_program(&mut self) {
         let input = self.expr_input.clone();
+        let mut named_values: BTreeMap<String, SetValue> = self
+            .named_sets
+            .iter()
+            .map(|(k, e)| (k.clone(), e.value.clone()))
+            .collect();
         for raw_line in input.split(&['\n', ';'][..]) {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -389,7 +409,7 @@ impl GraphPlotApp {
                     .collect();
                 let ctx = EvalCtx {
                     graphs,
-                    named: &self.named_sets,
+                    named: &named_values,
                 };
                 expr::eval_statement(&stmt, &ctx)
             };
@@ -402,7 +422,13 @@ impl GraphPlotApp {
                         value.len(),
                         truncate(&value.format(), 160)
                     );
-                    self.named_sets.insert(name, value);
+                    named_values.insert(name.clone(), value.clone());
+                    let color = self
+                        .named_sets
+                        .get(&name)
+                        .map(|e| e.color)
+                        .unwrap_or_else(|| PALETTE[self.named_sets.len() % PALETTE.len()]);
+                    self.named_sets.insert(name, NamedSetEntry { value, color });
                     self.push_log(true, msg);
                 }
                 Ok(StmtResult::Graph(name, verts, edges)) => {
@@ -436,23 +462,6 @@ impl GraphPlotApp {
         if self.expr_log.len() > 50 {
             self.expr_log.remove(0);
         }
-    }
-
-    fn set_value_to_graph(&self, value: &SetValue) -> Graph {
-        let mut g = Graph::new(self.expr_result_directed);
-        match value {
-            SetValue::Vertices(vs) => {
-                for v in vs {
-                    g.add_vertex(v.clone());
-                }
-            }
-            SetValue::Edges(es) => {
-                for (a, b) in es {
-                    g.add_edge(a, b);
-                }
-            }
-        }
-        g
     }
 
     fn expr_panel(&mut self, ui: &mut egui::Ui) {
@@ -494,20 +503,28 @@ impl GraphPlotApp {
 
         if !self.named_sets.is_empty() {
             ui.add_space(6.0);
-            ui.label("Definierte Mengen:");
+            ui.label("Definierte Mengen (Farbe = Markierungsfarbe im Graphen):");
             let names: Vec<String> = self.named_sets.keys().cloned().collect();
             let mut to_remove: Option<String> = None;
             let mut to_open: Option<Graph> = None;
+            let directed = self.expr_result_directed;
             egui::ScrollArea::vertical()
                 .id_salt("named_sets_scroll")
                 .max_height(160.0)
                 .show(ui, |ui| {
                     for name in &names {
-                        let value = &self.named_sets[name];
+                        let Some(entry) = self.named_sets.get_mut(name) else {
+                            continue;
+                        };
                         ui.horizontal(|ui| {
-                            ui.label(format!("{name}: {} ({})", value.kind(), value.len()));
+                            ui.color_edit_button_srgba(&mut entry.color);
+                            ui.label(format!(
+                                "{name}: {} ({})",
+                                entry.value.kind(),
+                                entry.value.len()
+                            ));
                             if ui.small_button("-> Tab").clicked() {
-                                to_open = Some(self.set_value_to_graph(value));
+                                to_open = Some(set_value_to_graph(&entry.value, directed));
                             }
                             if ui.small_button("x").clicked() {
                                 to_remove = Some(name.clone());
@@ -544,6 +561,23 @@ impl GraphPlotApp {
                 });
         }
     }
+}
+
+fn set_value_to_graph(value: &SetValue, directed: bool) -> Graph {
+    let mut g = Graph::new(directed);
+    match value {
+        SetValue::Vertices(vs) => {
+            for v in vs {
+                g.add_vertex(v.clone());
+            }
+        }
+        SetValue::Edges(es) => {
+            for (a, b) in es {
+                g.add_edge(a, b);
+            }
+        }
+    }
+    g
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -597,7 +631,11 @@ impl eframe::App for GraphPlotApp {
     }
 }
 
-fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<String, SetValue>) {
+fn draw_graph_tab(
+    ui: &mut egui::Ui,
+    tab: &mut GraphTab,
+    named_sets: &BTreeMap<String, NamedSetEntry>,
+) {
     ui.horizontal(|ui| {
         ui.label("Name:");
         ui.text_edit_singleline(&mut tab.name);
@@ -629,30 +667,29 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<S
         }
     });
 
-    egui::ComboBox::from_label("Markierung")
-        .selected_text(
-            tab.highlight_name
-                .clone()
-                .unwrap_or_else(|| "Keine".to_string()),
-        )
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut tab.highlight_name, None, "Keine");
-            for name in named_sets.keys() {
-                ui.selectable_value(&mut tab.highlight_name, Some(name.clone()), name);
-            }
-        });
-    if let Some(name) = &tab.highlight_name {
-        match named_sets.get(name) {
-            Some(value) => {
-                ui.label(format!("({}, {} Elemente)", value.kind(), value.len()));
-            }
-            None => {
-                ui.colored_label(
-                    Color32::from_rgb(220, 80, 80),
-                    "(Menge existiert nicht mehr)",
-                );
-            }
-        }
+    if named_sets.is_empty() {
+        ui.label("Markierungen: keine Mengen definiert.");
+    } else {
+        egui::CollapsingHeader::new("Markierungen")
+            .default_open(true)
+            .show(ui, |ui| {
+                for (name, entry) in named_sets {
+                    let mut checked = tab.highlighted.contains(name);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut checked, name).changed() {
+                            if checked {
+                                tab.highlighted.insert(name.clone());
+                            } else {
+                                tab.highlighted.remove(name);
+                            }
+                        }
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), Sense::hover());
+                        ui.painter().rect_filled(rect, 2.0, entry.color);
+                        ui.label(format!("{} ({})", entry.value.kind(), entry.value.len()));
+                    });
+                }
+            });
     }
 
     egui::CollapsingHeader::new("Zufallsgraph erzeugen").show(ui, |ui| {
@@ -751,14 +788,33 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<S
 
     let node_radius = 14.0;
 
-    let highlight_value = tab.highlight_name.as_ref().and_then(|n| named_sets.get(n));
-    let highlight_vertices = match highlight_value {
-        Some(SetValue::Vertices(s)) => Some(s),
-        _ => None,
+    // Active highlights for this tab, in a fixed order so that a vertex/edge
+    // belonging to more than one highlighted set consistently shows the
+    // first matching set's color.
+    let active_highlights: Vec<&NamedSetEntry> = tab
+        .highlighted
+        .iter()
+        .filter_map(|name| named_sets.get(name))
+        .collect();
+    let vertex_highlight = |v: &VertexId| -> Option<Color32> {
+        active_highlights
+            .iter()
+            .find_map(|entry| match &entry.value {
+                SetValue::Vertices(set) if set.contains(v) => Some(entry.color),
+                _ => None,
+            })
     };
-    let highlight_edges = match highlight_value {
-        Some(SetValue::Edges(s)) => Some(s),
-        _ => None,
+    let edge_highlight = |a: &str, b: &str| -> Option<Color32> {
+        active_highlights
+            .iter()
+            .find_map(|entry| match &entry.value {
+                SetValue::Edges(set) => {
+                    let hit = set.contains(&(a.to_string(), b.to_string()))
+                        || (!tab.graph.directed && set.contains(&(b.to_string(), a.to_string())));
+                    hit.then_some(entry.color)
+                }
+                _ => None,
+            })
     };
 
     // Draw edges first (under nodes).
@@ -768,22 +824,14 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<S
         };
         let sa = to_screen(pa);
         let sb = to_screen(pb);
-        let is_highlighted = highlight_edges.is_some_and(|set| {
-            set.contains(&(a.clone(), b.clone()))
-                || (!tab.graph.directed && set.contains(&(b.clone(), a.clone())))
-        });
-        let stroke = if is_highlighted {
-            Stroke::new(3.0, HIGHLIGHT_COLOR)
-        } else {
-            Stroke::new(1.6, ui.visuals().text_color().gamma_multiply(0.6))
+        let highlight = edge_highlight(a, b);
+        let stroke = match highlight {
+            Some(color) => Stroke::new(3.0, color),
+            None => Stroke::new(1.6, ui.visuals().text_color().gamma_multiply(0.6)),
         };
         painter.line_segment([sa, sb], stroke);
         if tab.graph.directed {
-            let arrow_color = if is_highlighted {
-                HIGHLIGHT_COLOR
-            } else {
-                ui.visuals().text_color()
-            };
+            let arrow_color = highlight.unwrap_or_else(|| ui.visuals().text_color());
             draw_arrowhead(&painter, sa, sb, node_radius, arrow_color);
         }
     }
@@ -830,11 +878,10 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<S
         }
 
         let is_pending_from = tab.pending_edge_from.as_deref() == Some(v.as_str());
-        let is_highlighted = highlight_vertices.is_some_and(|set| set.contains(v));
         let fill = if is_pending_from {
             Color32::from_rgb(120, 170, 250)
-        } else if is_highlighted {
-            HIGHLIGHT_COLOR
+        } else if let Some(color) = vertex_highlight(v) {
+            color
         } else if node_resp.hovered() {
             ui.visuals().widgets.hovered.bg_fill
         } else {
