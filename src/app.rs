@@ -8,6 +8,8 @@ use crate::expr::{self, EvalCtx, SetValue, StmtResult};
 use crate::graph::{Graph, VertexId};
 use crate::layout::Layout;
 
+const HIGHLIGHT_COLOR: Color32 = Color32::from_rgb(255, 196, 0);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditMode {
     AddVertex,
@@ -40,6 +42,7 @@ struct GraphTab {
     rename_target: Option<VertexId>,
     rename_buffer: String,
     status: Option<String>,
+    highlight_name: Option<String>,
 }
 
 impl GraphTab {
@@ -57,6 +60,7 @@ impl GraphTab {
             rename_target: None,
             rename_buffer: String::new(),
             status: None,
+            highlight_name: None,
         }
     }
 
@@ -582,8 +586,9 @@ impl eframe::App for GraphPlotApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let named_sets = &self.named_sets;
             if let Some(tab) = self.tabs.get_mut(self.selected) {
-                draw_graph_tab(ui, tab);
+                draw_graph_tab(ui, tab, named_sets);
             }
         });
 
@@ -592,7 +597,7 @@ impl eframe::App for GraphPlotApp {
     }
 }
 
-fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab) {
+fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab, named_sets: &BTreeMap<String, SetValue>) {
     ui.horizontal(|ui| {
         ui.label("Name:");
         ui.text_edit_singleline(&mut tab.name);
@@ -623,6 +628,32 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab) {
             tab.pending_edge_from = None;
         }
     });
+
+    egui::ComboBox::from_label("Markierung")
+        .selected_text(
+            tab.highlight_name
+                .clone()
+                .unwrap_or_else(|| "Keine".to_string()),
+        )
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut tab.highlight_name, None, "Keine");
+            for name in named_sets.keys() {
+                ui.selectable_value(&mut tab.highlight_name, Some(name.clone()), name);
+            }
+        });
+    if let Some(name) = &tab.highlight_name {
+        match named_sets.get(name) {
+            Some(value) => {
+                ui.label(format!("({}, {} Elemente)", value.kind(), value.len()));
+            }
+            None => {
+                ui.colored_label(
+                    Color32::from_rgb(220, 80, 80),
+                    "(Menge existiert nicht mehr)",
+                );
+            }
+        }
+    }
 
     egui::CollapsingHeader::new("Zufallsgraph erzeugen").show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -720,6 +751,16 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab) {
 
     let node_radius = 14.0;
 
+    let highlight_value = tab.highlight_name.as_ref().and_then(|n| named_sets.get(n));
+    let highlight_vertices = match highlight_value {
+        Some(SetValue::Vertices(s)) => Some(s),
+        _ => None,
+    };
+    let highlight_edges = match highlight_value {
+        Some(SetValue::Edges(s)) => Some(s),
+        _ => None,
+    };
+
     // Draw edges first (under nodes).
     for (a, b) in &tab.graph.edges {
         let (Some(&pa), Some(&pb)) = (tab.layout.pos.get(a), tab.layout.pos.get(b)) else {
@@ -727,12 +768,23 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab) {
         };
         let sa = to_screen(pa);
         let sb = to_screen(pb);
-        painter.line_segment(
-            [sa, sb],
-            Stroke::new(1.6, ui.visuals().text_color().gamma_multiply(0.6)),
-        );
+        let is_highlighted = highlight_edges.is_some_and(|set| {
+            set.contains(&(a.clone(), b.clone()))
+                || (!tab.graph.directed && set.contains(&(b.clone(), a.clone())))
+        });
+        let stroke = if is_highlighted {
+            Stroke::new(3.0, HIGHLIGHT_COLOR)
+        } else {
+            Stroke::new(1.6, ui.visuals().text_color().gamma_multiply(0.6))
+        };
+        painter.line_segment([sa, sb], stroke);
         if tab.graph.directed {
-            draw_arrowhead(&painter, sa, sb, node_radius, ui.visuals().text_color());
+            let arrow_color = if is_highlighted {
+                HIGHLIGHT_COLOR
+            } else {
+                ui.visuals().text_color()
+            };
+            draw_arrowhead(&painter, sa, sb, node_radius, arrow_color);
         }
     }
 
@@ -778,8 +830,11 @@ fn draw_graph_tab(ui: &mut egui::Ui, tab: &mut GraphTab) {
         }
 
         let is_pending_from = tab.pending_edge_from.as_deref() == Some(v.as_str());
+        let is_highlighted = highlight_vertices.is_some_and(|set| set.contains(v));
         let fill = if is_pending_from {
             Color32::from_rgb(120, 170, 250)
+        } else if is_highlighted {
+            HIGHLIGHT_COLOR
         } else if node_resp.hovered() {
             ui.visuals().widgets.hovered.bg_fill
         } else {

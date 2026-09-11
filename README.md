@@ -83,6 +83,15 @@ Definierte Mengen erscheinen in einer Liste mit Größe/Typ und lassen sich
 per Klick auch direkt als eigener Graph-Tab öffnen (Knoten ohne Kanten
 bzw. Kanten mit ihren Endpunkten).
 
+### Mengen im vorhandenen Graphen einfärben
+
+Jeder Graph-Tab hat oben eine **"Markierung"**-Auswahl: Wählt man dort eine
+definierte Menge aus, werden ihre Knoten bzw. Kanten direkt im bestehenden
+Graphen gelb hervorgehoben, statt einen neuen Tab zu öffnen. Das
+funktioniert für jede beliebige Menge, unabhängig davon, aus welchem Graphen
+sie berechnet wurde – nur die tatsächlich im aktuellen Tab vorhandenen
+Knoten/Kanten der Menge werden markiert.
+
 ## Knotenidentität bei Mengenoperationen
 
 Knoten werden über ihr Label (z. B. `v0`, `v3`, ...) identifiziert. Zwei
