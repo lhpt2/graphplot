@@ -58,7 +58,17 @@ Grundbausteine:
 | `and`, `or`, `not` | Aussagenlogik | `∧ ∨ ¬` |
 | `forall x in S . P`, `exists x in S . P` | Quantoren | `∀ ∃` |
 | `{ v : v in S, Bedingung }` | Mengenbildner über Knoten (oder Kanten, wenn `S` eine Kantenmenge ist) | |
-| `{ (u,v) : u in S1, v in S2, Bedingung }` | Mengenbildner für Kanten aus zwei Knotenvariablen | |
+| `{ (u,v) : u in S1, v in S2, Bedingung }` | Mengenbildner für **Kanten** aus zwei Knotenvariablen | |
+| `{ u, v : u in S1, v in S2, Bedingung }` | wie oben, aber **ohne** Klammern: vereinigt die Werte von `u` **und** `v` in *eine* Knotenmenge (keine Kanten!) | |
+
+⚠️ Die letzte Zeile ist eine häufige Falle: `{ v, w : v in V(G1), w in V(G1),
+v != w, (v,w) notin E(G1) }` liefert (fast) **alle** Knoten, nicht die
+"unverbundenen" – weil praktisch jeder Knoten irgendeinen Nicht-Nachbarn hat
+und dadurch über mindestens eine bestehende Kombination in die Vereinigung
+gelangt. Für "Knoten ohne Kante zu irgendeinem anderen" die
+Ein-Variablen-`forall`-Form (siehe `Isoliert` unten) verwenden; für die
+tatsächliche Menge der Nicht-Kanten (als Kantenmenge) die Klammerform
+`{ (u,v) : ... }` (siehe `Komplement` unten).
 
 Beispiele:
 

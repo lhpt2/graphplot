@@ -416,12 +416,30 @@ impl GraphPlotApp {
 
             match outcome {
                 Ok(StmtResult::Set(name, value)) => {
-                    let msg = format!(
+                    let mut msg = format!(
                         "{name} = {} ({} Elemente): {}",
                         value.kind(),
                         value.len(),
                         truncate(&value.format(), 160)
                     );
+                    if let expr::Stmt::DefineSet(
+                        _,
+                        expr::SetExpr::Comprehension {
+                            output: expr::Output::Terms(names),
+                            ..
+                        },
+                    ) = &stmt
+                    {
+                        if names.len() > 1 {
+                            msg.push_str(&format!(
+                                "\n  Hinweis: '{}' (ohne Klammern) vereinigt die Werte \
+                                 dieser Variablen in EINE Menge, bildet aber keine Paare/Kanten. \
+                                 Für Kanten '(x,y)' in Klammern schreiben; für \"nur Knoten ohne \
+                                 Verbindung zu irgendeinem anderen\" eine Variable + forall nutzen.",
+                                names.join(", ")
+                            ));
+                        }
+                    }
                     named_values.insert(name.clone(), value.clone());
                     let color = self
                         .named_sets
