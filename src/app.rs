@@ -1,9 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use rand::SeedableRng;
 
+use crate::expr::{self, EvalCtx, SetValue, StmtResult};
 use crate::graph::{Graph, VertexId};
 use crate::layout::Layout;
 
@@ -127,6 +128,11 @@ pub struct GraphPlotApp {
     op_result_directed: bool,
     op_induced_selection: BTreeSet<VertexId>,
     op_error: Option<String>,
+
+    named_sets: BTreeMap<String, SetValue>,
+    expr_input: String,
+    expr_result_directed: bool,
+    expr_log: Vec<(bool, String)>,
 }
 
 impl Default for GraphPlotApp {
@@ -142,6 +148,13 @@ impl Default for GraphPlotApp {
             op_result_directed: false,
             op_induced_selection: BTreeSet::new(),
             op_error: None,
+
+            named_sets: BTreeMap::new(),
+            expr_input: String::from(
+                "# Beispiel: Knoten ohne Kante in G1\nA = { v : v in V(G1), forall u in V(G1) . not ((v,u) in E(G1) or (u,v) in E(G1)) }",
+            ),
+            expr_result_directed: false,
+            expr_log: Vec::new(),
         }
     }
 }
@@ -347,6 +360,195 @@ impl GraphPlotApp {
             ui.colored_label(Color32::from_rgb(220, 80, 80), err);
         }
     }
+
+    fn run_expr_program(&mut self) {
+        let input = self.expr_input.clone();
+        for raw_line in input.split(&['\n', ';'][..]) {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let stmt = match expr::parse_statement(line) {
+                Ok(s) => s,
+                Err(err) => {
+                    self.push_log(false, format!("{line}\n  Fehler: {err}"));
+                    break;
+                }
+            };
+
+            let outcome = {
+                let graphs: BTreeMap<&str, &Graph> = self
+                    .tabs
+                    .iter()
+                    .map(|t| (t.name.as_str(), &t.graph))
+                    .collect();
+                let ctx = EvalCtx {
+                    graphs,
+                    named: &self.named_sets,
+                };
+                expr::eval_statement(&stmt, &ctx)
+            };
+
+            match outcome {
+                Ok(StmtResult::Set(name, value)) => {
+                    let msg = format!(
+                        "{name} = {} ({} Elemente): {}",
+                        value.kind(),
+                        value.len(),
+                        truncate(&value.format(), 160)
+                    );
+                    self.named_sets.insert(name, value);
+                    self.push_log(true, msg);
+                }
+                Ok(StmtResult::Graph(name, verts, edges)) => {
+                    let mut g = Graph::new(self.expr_result_directed);
+                    for v in &verts {
+                        g.add_vertex(v.clone());
+                    }
+                    for (a, b) in &edges {
+                        g.add_edge(a, b);
+                    }
+                    let msg = format!(
+                        "Graph \"{name}\" erzeugt: |V| = {}, |E| = {}",
+                        g.vertices.len(),
+                        g.edges.len()
+                    );
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    self.add_tab(GraphTab::from_graph(id, name, g));
+                    self.push_log(true, msg);
+                }
+                Err(err) => {
+                    self.push_log(false, format!("{line}\n  Fehler: {err}"));
+                    break;
+                }
+            }
+        }
+    }
+
+    fn push_log(&mut self, ok: bool, msg: String) {
+        self.expr_log.push((ok, msg));
+        if self.expr_log.len() > 50 {
+            self.expr_log.remove(0);
+        }
+    }
+
+    fn set_value_to_graph(&self, value: &SetValue) -> Graph {
+        let mut g = Graph::new(self.expr_result_directed);
+        match value {
+            SetValue::Vertices(vs) => {
+                for v in vs {
+                    g.add_vertex(v.clone());
+                }
+            }
+            SetValue::Edges(es) => {
+                for (a, b) in es {
+                    g.add_edge(a, b);
+                }
+            }
+        }
+        g
+    }
+
+    fn expr_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Mengenausdrücke (Text)");
+        ui.label(
+            "Definiere benannte Knoten-/Kantenmengen und neue Graphen per Ausdruck. \
+             Mehrere Zeilen (oder ';'-getrennt) werden der Reihe nach ausgeführt und \
+             können aufeinander aufbauen.",
+        );
+
+        egui::CollapsingHeader::new("Syntax-Spickzettel").show(ui, |ui| {
+            ui.label(
+                "V(G) / E(G)   Knoten-/Kantenmenge von Tab \"G\"\n\
+                 A | B   A & B   A - B   A ^ B    Vereinigung, Durchschnitt, Differenz, sym. Differenz\n\
+                 {}  bzw. empty    leere Menge\n\
+                 { v : v in S, Bedingung }              Mengenbildner über Knoten (oder Kanten, falls S eine Kantenmenge ist)\n\
+                 { (u,v) : u in S1, v in S2, Bedingung }   Mengenbildner für Kanten aus zwei Knotenvariablen\n\
+                 forall x in S . P     exists x in S . P     Quantoren\n\
+                 x in S   x notin S   x = y   x != y   S <= T (Teilmenge)\n\
+                 and / or / not  (auch: && || ! , bzw. ∧ ∨ ¬)\n\
+                 Name = Ausdruck                zum Benennen einer Menge\n\
+                 Name = (V-Ausdruck, E-Ausdruck)   erzeugt einen neuen Graphen G' = (V', E') als Tab\n\n\
+                 Auch Unicode-Symbole werden akzeptiert: ∪ ∩ ∖ △ ∀ ∃ ∈ ∉ ⊆ ∧ ∨ ¬ ≠ ∅ \
+                 (werden je nach Schriftart evtl. nicht angezeigt, funktionieren aber).",
+            );
+        });
+
+        ui.add(
+            egui::TextEdit::multiline(&mut self.expr_input)
+                .desired_rows(4)
+                .font(egui::TextStyle::Monospace),
+        );
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.expr_result_directed, "Ergebnis-Graphen gerichtet");
+        });
+        if ui.button("Ausführen").clicked() {
+            self.run_expr_program();
+        }
+
+        if !self.named_sets.is_empty() {
+            ui.add_space(6.0);
+            ui.label("Definierte Mengen:");
+            let names: Vec<String> = self.named_sets.keys().cloned().collect();
+            let mut to_remove: Option<String> = None;
+            let mut to_open: Option<Graph> = None;
+            egui::ScrollArea::vertical()
+                .id_salt("named_sets_scroll")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for name in &names {
+                        let value = &self.named_sets[name];
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{name}: {} ({})", value.kind(), value.len()));
+                            if ui.small_button("-> Tab").clicked() {
+                                to_open = Some(self.set_value_to_graph(value));
+                            }
+                            if ui.small_button("x").clicked() {
+                                to_remove = Some(name.clone());
+                            }
+                        });
+                    }
+                });
+            if let Some(name) = to_remove {
+                self.named_sets.remove(&name);
+            }
+            if let Some(g) = to_open {
+                let id = self.next_id;
+                self.next_id += 1;
+                let name = format!("Menge{}", id + 1);
+                self.add_tab(GraphTab::from_graph(id, name, g));
+            }
+        }
+
+        if !self.expr_log.is_empty() {
+            ui.add_space(6.0);
+            ui.label("Verlauf:");
+            egui::ScrollArea::vertical()
+                .id_salt("expr_log_scroll")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    for (ok, msg) in self.expr_log.iter().rev() {
+                        let color = if *ok {
+                            Color32::from_rgb(140, 190, 140)
+                        } else {
+                            Color32::from_rgb(220, 80, 80)
+                        };
+                        ui.colored_label(color, msg);
+                    }
+                });
+        }
+    }
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max_chars).collect();
+        format!("{head}...")
+    }
 }
 
 fn op_symbol(kind: OpKind) -> &'static str {
@@ -374,6 +576,8 @@ impl eframe::App for GraphPlotApp {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.operations_panel(ui);
+                    ui.separator();
+                    self.expr_panel(ui);
                 });
             });
 
