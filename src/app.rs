@@ -163,6 +163,7 @@ pub struct GraphPlotApp {
     lua_apply_source: Option<u64>,
     lua_apply_filter: Option<String>,
     lua_result_name: String,
+    lua_open_tab: bool,
     lua_log: Vec<(bool, String)>,
 }
 
@@ -217,6 +218,7 @@ impl Default for GraphPlotApp {
             lua_apply_source: Some(0),
             lua_apply_filter: None,
             lua_result_name: String::new(),
+            lua_open_tab: true,
             lua_log: Vec::new(),
         }
     }
@@ -485,12 +487,7 @@ impl GraphPlotApp {
                         }
                     }
                     named_values.insert(name.clone(), value.clone());
-                    let color = self
-                        .named_sets
-                        .get(&name)
-                        .map(|e| e.color)
-                        .unwrap_or_else(|| PALETTE[self.named_sets.len() % PALETTE.len()]);
-                    self.named_sets.insert(name, NamedSetEntry { value, color });
+                    self.insert_named_set(name, value);
                     self.push_log(true, msg);
                 }
                 Ok(StmtResult::Graph(name, verts, edges)) => {
@@ -526,6 +523,17 @@ impl GraphPlotApp {
         }
     }
 
+    /// Inserts/overwrites a named set, keeping its existing highlight color
+    /// if it already had one, or assigning the next palette color if new.
+    fn insert_named_set(&mut self, name: String, value: SetValue) {
+        let color = self
+            .named_sets
+            .get(&name)
+            .map(|e| e.color)
+            .unwrap_or_else(|| PALETTE[self.named_sets.len() % PALETTE.len()]);
+        self.named_sets.insert(name, NamedSetEntry { value, color });
+    }
+
     fn compute_greedy_independent_set(&mut self) {
         let Some(id) = self.mis_source else {
             self.push_log(false, "Bitte einen Graphen auswählen.".to_string());
@@ -552,12 +560,7 @@ impl GraphPlotApp {
             value.len(),
             truncate(&value.format(), 160)
         );
-        let color = self
-            .named_sets
-            .get(&name)
-            .map(|e| e.color)
-            .unwrap_or_else(|| PALETTE[self.named_sets.len() % PALETTE.len()]);
-        self.named_sets.insert(name, NamedSetEntry { value, color });
+        self.insert_named_set(name, value);
         self.push_log(true, msg);
     }
 
@@ -605,19 +608,34 @@ impl GraphPlotApp {
 
         match crate::scripting::run_filter(&source, &self.lua_library, &input) {
             Ok(g) => {
-                let msg = format!(
-                    "Filter \"{filter_name}\" auf \"{source_graph_name}\" angewendet: |V| = {}, |E| = {}",
-                    g.vertices.len(),
-                    g.edges.len()
-                );
                 let name = if self.lua_result_name.trim().is_empty() {
                     format!("{filter_name}({source_graph_name})")
                 } else {
                     self.lua_result_name.trim().to_string()
                 };
-                let id = self.next_id;
-                self.next_id += 1;
-                self.add_tab(GraphTab::from_graph(id, name, g));
+
+                let vertices_name = format!("{name} (Knoten)");
+                let edges_name = format!("{name} (Kanten)");
+                self.insert_named_set(
+                    vertices_name.clone(),
+                    SetValue::Vertices(g.vertices.clone()),
+                );
+                self.insert_named_set(edges_name.clone(), SetValue::Edges(g.edges.clone()));
+
+                let mut msg = format!(
+                    "Filter \"{filter_name}\" auf \"{source_graph_name}\" angewendet: |V| = {}, |E| = {}. \
+                     Als Mengen gespeichert: \"{vertices_name}\", \"{edges_name}\" (im Graphen markierbar).",
+                    g.vertices.len(),
+                    g.edges.len()
+                );
+
+                if self.lua_open_tab {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    self.add_tab(GraphTab::from_graph(id, name.clone(), g));
+                    msg.push_str(&format!(" Neuer Tab \"{name}\" geöffnet."));
+                }
+
                 self.push_lua_log(true, msg);
             }
             Err(err) => {
@@ -722,10 +740,15 @@ impl GraphPlotApp {
                     }
                 });
             ui.horizontal(|ui| {
-                ui.label("Neuer Tab-Name:");
+                ui.label("Ergebnisname:");
                 ui.text_edit_singleline(&mut self.lua_result_name);
             });
-            if ui.button("Anwenden -> neuer Tab").clicked() {
+            ui.checkbox(&mut self.lua_open_tab, "Auch als neuer Tab öffnen");
+            ui.label(
+                "Das Ergebnis wird immer als Knoten- und Kantenmenge gespeichert und kann \
+                 in jedem Graph-Tab unter \"Markierungen\" farbig hervorgehoben werden.",
+            );
+            if ui.button("Anwenden").clicked() {
                 self.apply_lua_filter();
             }
         }

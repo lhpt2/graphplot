@@ -79,8 +79,16 @@ vor jedem Filter-Skript geladen, sodass eigene Hilfsfunktionen
 (`function is_isolated(g, v) ... end`) über mehrere Filter hinweg
 wiederverwendet werden können. Fertige Filter lassen sich unter einem
 Namen speichern, bearbeiten, löschen und über eine Auswahl (Graph +
-Filter) auf einen bestehenden Graphen anwenden – das Ergebnis öffnet
-automatisch als neuer, geplotteter Tab.
+Filter) auf einen bestehenden Graphen anwenden.
+
+Ein Filter-Ergebnis wird dabei genauso wie ein Mengenausdruck-Ergebnis
+behandelt: Knoten- und Kantenmenge des Ergebnisgraphen landen automatisch
+als zwei benannte Mengen ("Name (Knoten)" / "Name (Kanten)") in der
+Liste "Definierte Mengen" – mit eigener Farbe und direkt über
+"Markierungen" in jedem Graph-Tab farbig hervorhebbar, genau wie jede
+andere über einen Mengenausdruck erzeugte Menge. Zusätzlich kann
+optional (Checkbox "Auch als neuer Tab öffnen", standardmäßig an) der
+komplette Ergebnisgraph als neuer, geplotteter Tab geöffnet werden.
 
 ## Unabhängige Menge (Independent Set)
 
