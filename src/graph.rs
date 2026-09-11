@@ -60,7 +60,6 @@ impl Graph {
         self.edges.remove(&e);
     }
 
-    #[allow(dead_code)]
     pub fn has_edge(&self, from: &str, to: &str) -> bool {
         self.edges.contains(&self.normalize(from, to))
     }

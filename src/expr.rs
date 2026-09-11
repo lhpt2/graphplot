@@ -276,7 +276,11 @@ pub enum SetExpr {
 
 #[derive(Clone, Debug)]
 pub enum Output {
-    Var(String),
+    /// One or more bare variables, e.g. `v` or `v, w`. Each surviving
+    /// assignment contributes *every* listed variable's own value into one
+    /// combined result set (a union of projections), not a tuple.
+    Terms(Vec<String>),
+    /// An explicit pair `(v, w)`: builds one edge per surviving assignment.
     Pair(String, String),
 }
 
@@ -477,7 +481,12 @@ impl Parser {
             self.expect(Tok::RParen)?;
             Ok(Output::Pair(a, b))
         } else {
-            Ok(Output::Var(self.expect_ident()?))
+            let mut names = vec![self.expect_ident()?];
+            while self.check(&Tok::Comma) {
+                self.advance();
+                names.push(self.expect_ident()?);
+            }
+            Ok(Output::Terms(names))
         }
     }
 
@@ -815,27 +824,38 @@ fn eval_comprehension(output: &Output, quals: &[Qual], ctx: &EvalCtx) -> Result<
     }
 
     match output {
-        Output::Var(name) => {
+        Output::Terms(names) => {
             let mut verts = BTreeSet::new();
             let mut edges = BTreeSet::new();
-            let mut is_edge = false;
+            let mut saw_vertex = false;
+            let mut saw_edge = false;
             for env in &envs {
-                match env.get(name) {
-                    Some(Bound::Vertex(v)) => {
-                        verts.insert(v.clone());
-                    }
-                    Some(Bound::Edge(e)) => {
-                        edges.insert(e.clone());
-                        is_edge = true;
-                    }
-                    None => {
-                        return Err(format!(
-                            "Variable \"{name}\" ist im Ausgabeausdruck nicht gebunden"
-                        ))
+                for name in names {
+                    match env.get(name) {
+                        Some(Bound::Vertex(v)) => {
+                            verts.insert(v.clone());
+                            saw_vertex = true;
+                        }
+                        Some(Bound::Edge(e)) => {
+                            edges.insert(e.clone());
+                            saw_edge = true;
+                        }
+                        None => {
+                            return Err(format!(
+                                "Variable \"{name}\" ist im Ausgabeausdruck nicht gebunden"
+                            ))
+                        }
                     }
                 }
             }
-            Ok(if is_edge {
+            if saw_vertex && saw_edge {
+                return Err(
+                    "Ausgabeausdruck mischt Knoten- und Kantenvariablen — das ergibt keine \
+                     einheitliche Menge"
+                        .to_string(),
+                );
+            }
+            Ok(if saw_edge {
                 SetValue::Edges(edges)
             } else {
                 SetValue::Vertices(verts)
@@ -890,13 +910,11 @@ fn eval_bool(pred: &BoolExpr, ctx: &EvalCtx, env: &Env) -> Result<bool, String> 
         BoolExpr::Ne(a, b) => Ok(term_value(a, env)? != term_value(b, env)?),
         BoolExpr::MemberOf(t, se) => {
             let v = term_value(t, env)?;
-            let s = eval_set(se, ctx)?;
-            member(&v, &s)
+            edge_aware_member(&v, se, ctx)
         }
         BoolExpr::NotMemberOf(t, se) => {
             let v = term_value(t, env)?;
-            let s = eval_set(se, ctx)?;
-            member(&v, &s).map(|b| !b)
+            edge_aware_member(&v, se, ctx).map(|b| !b)
         }
         BoolExpr::Subset(a, b) => {
             let (sa, sb) = (eval_set(a, ctx)?, eval_set(b, ctx)?);
@@ -934,6 +952,24 @@ fn eval_bool(pred: &BoolExpr, ctx: &EvalCtx, env: &Env) -> Result<bool, String> 
             Ok(false)
         }
     }
+}
+
+/// Membership check that special-cases `(a,b) in E(G)` / `notin`: an edge
+/// term checked directly against a graph's own edge set is resolved via
+/// `Graph::has_edge`, which is symmetric for undirected graphs (so `(a,b)`
+/// and `(b,a)` both correctly count as "the same edge"). Any other
+/// combination (composed/derived edge sets, named sets, vertex terms)
+/// falls back to plain, order-sensitive tuple membership.
+fn edge_aware_member(v: &Bound, se: &SetExpr, ctx: &EvalCtx) -> Result<bool, String> {
+    if let (Bound::Edge((a, b)), SetExpr::GraphEdges(g)) = (v, se) {
+        let gr = ctx
+            .graphs
+            .get(g.as_str())
+            .ok_or_else(|| format!("Unbekannter Graph \"{g}\""))?;
+        return Ok(gr.has_edge(a, b));
+    }
+    let s = eval_set(se, ctx)?;
+    member(v, &s)
 }
 
 fn member(v: &Bound, s: &SetValue) -> Result<bool, String> {
@@ -1104,6 +1140,65 @@ mod tests {
         assert!(e.contains(&("v0".to_string(), "v2".to_string())));
         assert!(e.contains(&("v2".to_string(), "v0".to_string())));
         assert!(!e.contains(&("v0".to_string(), "v1".to_string())));
+        assert!(!e.contains(&("v1".to_string(), "v0".to_string()))); // symmetric for undirected G1
+    }
+
+    #[test]
+    fn bare_comma_output_unions_both_variables() {
+        // `{ v, w : ... }` (no parens) unions each surviving assignment's v
+        // AND w into one vertex set - it does NOT build edges. Because the
+        // reflexive combo (x,x) always satisfies "(x,x) notin E(G1)" (no
+        // self-loops exist), every vertex of V(G2) ends up included - this
+        // form is generally not what you want for "vertices with no edge
+        // between them"; see `isolated_within_subset_via_forall` for that.
+        let graphs = fixture();
+        let mut named = BTreeMap::new();
+        run(
+            "C = { v, w : v in V(G2), w in V(G2), (v, w) notin E(G1) }",
+            &graphs,
+            &mut named,
+        );
+        let SetValue::Vertices(v) = &named["C"] else {
+            panic!()
+        };
+        assert_eq!(
+            v,
+            &["v1", "v2", "v4"].iter().map(|s| s.to_string()).collect()
+        );
+    }
+
+    #[test]
+    fn isolated_within_subset_via_forall() {
+        // The correct one-variable formulation for "vertices in V(G2) that
+        // have no edge (in G1) to any other vertex of V(G2)".
+        let graphs = fixture();
+        let mut named = BTreeMap::new();
+        run(
+            "C = { v : v in V(G2), forall w in V(G2) . (v, w) notin E(G1) }",
+            &graphs,
+            &mut named,
+        );
+        let SetValue::Vertices(v) = &named["C"] else {
+            panic!()
+        };
+        // v1-v2 is an edge in G1, so both v1 and v2 are excluded; only v4 remains.
+        assert_eq!(v, &["v4"].iter().map(|s| s.to_string()).collect());
+    }
+
+    #[test]
+    fn edge_membership_against_graph_is_symmetric_for_undirected() {
+        let graphs = fixture();
+        let named = BTreeMap::new();
+        let stmt =
+            parse_statement("C = { v : v in V(G2), forall w in V(G2) . (w, v) notin E(G1) }")
+                .unwrap();
+        let c = ctx(&graphs, &named);
+        let StmtResult::Set(_, SetValue::Vertices(v)) = eval_statement(&stmt, &c).unwrap() else {
+            panic!()
+        };
+        // Same as above but with the pair reversed - has_edge() must catch
+        // this symmetrically for G1 (undirected), so the result is unchanged.
+        assert_eq!(v, ["v4"].iter().map(|s| s.to_string()).collect());
     }
 
     #[test]
