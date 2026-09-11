@@ -195,6 +195,17 @@ kombiniert, wird vor der Operation automatisch in den gewählten
 Ziel-Modus konvertiert (ungerichtete Kante `{a,b}` ⇄ gerichtete Kantenpaare
 `(a,b)` und `(b,a)`).
 
+## Layout-Simulation
+
+Das Feder-Layout läuft ohne Geschwindigkeit/Impuls: Jeder Schritt bewegt
+einen Knoten nur um einen gedämpften Bruchteil der aktuell wirkenden
+Kraft, sodass die Schrittweite zum Gleichgewicht hin gegen null geht statt
+darüber hinauszuschießen und endlos zu oszillieren. Sobald sich kein
+Knoten mehr um mehr als eine sehr kleine Schwelle bewegen würde, gilt das
+Layout als "zur Ruhe gekommen" und die App hört auf, ständig neu zu
+zeichnen (statt wie zuvor mit voller Framerate für immer weiterzulaufen) –
+das war die Ursache des sichtbaren Zitterns bei Kanten und Graphen.
+
 ## Bauen & Starten
 
 ```bash

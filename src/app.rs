@@ -959,13 +959,19 @@ impl eframe::App for GraphPlotApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let named_sets = &self.named_sets;
+            let mut still_settling = false;
             if let Some(tab) = self.tabs.get_mut(self.selected) {
-                draw_graph_tab(ui, tab, named_sets);
+                still_settling = draw_graph_tab(ui, tab, named_sets);
+            }
+            // Only keep repainting on a timer while the layout is actually
+            // moving; once it settles, egui idles normally (still repaints
+            // instantly on real input) instead of redrawing at full frame
+            // rate forever, which is also what let tiny leftover forces
+            // show up as a visible, endless jitter.
+            if still_settling {
+                ctx.request_repaint();
             }
         });
-
-        // Keep animating the layout of the active tab.
-        ctx.request_repaint();
     }
 }
 
@@ -973,7 +979,7 @@ fn draw_graph_tab(
     ui: &mut egui::Ui,
     tab: &mut GraphTab,
     named_sets: &BTreeMap<String, NamedSetEntry>,
-) {
+) -> bool {
     ui.horizontal(|ui| {
         ui.label("Name:");
         ui.text_edit_singleline(&mut tab.name);
@@ -1119,7 +1125,7 @@ fn draw_graph_tab(
         (canvas_rect.width() / 2.0 - 20.0).max(10.0),
         (canvas_rect.height() / 2.0 - 20.0).max(10.0),
     );
-    tab.layout.step(&tab.graph, bounds);
+    let still_settling = tab.layout.step(&tab.graph, bounds);
 
     let to_screen = |p: Pos2| center + p.to_vec2();
     let to_world = |p: Pos2| (p - center).to_pos2();
@@ -1242,6 +1248,7 @@ fn draw_graph_tab(
     if !dragging_any && tab.layout.dragging.is_some() {
         tab.layout.dragging = None;
     }
+    let still_settling = still_settling || dragging_any;
 
     tab.status = None;
 
@@ -1283,6 +1290,8 @@ fn draw_graph_tab(
             }
         }
     }
+
+    still_settling
 }
 
 fn rename_vertex(graph: &mut Graph, layout: &mut Layout, old: &str, new: &str) {
